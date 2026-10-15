@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 
 inline int W = 1280;
@@ -63,8 +65,15 @@ inline int frameHistCount = 0;
 inline int frameHistIdx = 0;
 
 inline double ftP50Ms = 0.0;
+inline double ftP95Ms = 0.0;
 inline double ftP99Ms = 0.0;
 inline double ftMaxMs = 0.0;
+
+inline double gpuMs = 0.0;
+
+inline bool useSeedOverride = false;
+
+inline std::array<std::uint32_t, 4> masterSeed = {};
 
 inline void pushFrameTime(double ms) {
     frameHistMs[frameHistIdx] = ms;
@@ -82,10 +91,11 @@ inline void updateFrameStats() {
     std::sort(sorted, sorted + frameHistCount);
 
     ftP50Ms = sorted[frameHistCount / 2];
+    ftP95Ms = sorted[(int)((frameHistCount - 1) * 0.95)];
     ftP99Ms = sorted[(int)((frameHistCount - 1) * 0.99)];
     ftMaxMs = sorted[frameHistCount - 1];
 }
 
 inline float getDist() {
-    return ZOOM_BASE * std::exp(zoomExp);
+    return (float)(ZOOM_BASE * std::exp(zoomExp));
 }
