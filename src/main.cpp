@@ -7,7 +7,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <new>
+#include <thread>
 #include <vector>
 
 #include "config.h"
@@ -29,15 +31,56 @@ static void uploadInstances(GLuint instVbo, const std::vector<Instance>& data) {
         GL_DYNAMIC_DRAW);
 }
 
+static char* envDup(const char* name) {
+#ifdef _MSC_VER
+    char* v = nullptr;
+    size_t len = 0;
+
+    if (_dupenv_s(&v, &len, name) != 0)
+        return nullptr;
+
+    return v;
+#else
+    const char* v = std::getenv(name);
+
+    if (!v)
+        return nullptr;
+
+    char* copy = (char*)std::malloc(std::strlen(v) + 1);
+
+    if (copy)
+        std::strcpy(copy, v);
+
+    return copy;
+#endif
+}
+
+static std::vector<Instance> generateInstances(int n) {
+    if (useSeedOverride)
+        return buildInstancesSeeded(n, masterSeed);
+
+    return buildInstances(n);
+}
+
 static void handleRebuild(GLuint instVbo, std::vector<Instance>& instances) {
     if (INST < 1)
         INST = 1;
 
     try {
-        std::vector<Instance> next = buildInstances(INST);
+        double t0 = glfwGetTime();
+        std::vector<Instance> next = generateInstances(INST);
+        double t1 = glfwGetTime();
+
         instances.swap(next);
 
         uploadInstances(instVbo, instances);
+
+        std::fprintf(
+            stderr,
+            "rebuild inst=%d build_ms=%.1f upload_ms=%.1f\n",
+            INST,
+            (t1 - t0) * 1000.0,
+            (glfwGetTime() - t1) * 1000.0);
 
         std::snprintf(cubeCountBuffer, sizeof(cubeCountBuffer), "%d", INST);
         titleDirty = true;
@@ -48,7 +91,7 @@ static void handleRebuild(GLuint instVbo, std::vector<Instance>& instances) {
 
         std::snprintf(cubeCountBuffer, sizeof(cubeCountBuffer), "%d", INST);
 
-        instances = buildInstances(INST);
+        instances = generateInstances(INST);
         uploadInstances(instVbo, instances);
 
         titleDirty = true;
@@ -131,7 +174,43 @@ int main() {
 
     glGenBuffers(1, &instVbo);
 
-    std::vector<Instance> instances = buildInstances(INST);
+    if (char* seedEnv = envDup("CUBECHAOS_SEED")) {
+        char* endp = nullptr;
+        unsigned long long v = std::strtoull(seedEnv, &endp, 10);
+
+        if (!endp || endp == seedEnv || *endp != '\0') {
+            std::fprintf(
+                stderr, "CUBECHAOS_SEED invalid (%s), ignored\n", seedEnv);
+        } else {
+            std::uint32_t k = (std::uint32_t)v;
+
+            masterSeed = {
+                k,
+                k * 2654435761u,
+                k >> 13,
+                0x9E3779B9u
+            };
+
+            useSeedOverride = true;
+
+            std::fprintf(
+                stderr,
+                "CUBECHAOS_SEED=%s (deterministic layout, debug only)\n",
+                seedEnv);
+        }
+
+        std::free(seedEnv);
+    }
+
+    double genT0 = glfwGetTime();
+    std::vector<Instance> instances = generateInstances(INST);
+    unsigned hc = std::thread::hardware_concurrency();
+    std::fprintf(
+        stderr,
+        "startup build inst=%d threads=%u ms=%.1f\n",
+        INST,
+        hc ? hc : 1u,
+        (glfwGetTime() - genT0) * 1000.0);
     uploadInstances(instVbo, instances);
 
     glVertexAttribPointer(
@@ -143,6 +222,13 @@ int main() {
     GLint timeLoc = glGetUniformLocation(prog, "time");
 
     MsaaTarget msaa;
+
+    GLuint gpuQ[2][2] = {};
+    glGenQueries(2, gpuQ[0]);
+    glGenQueries(2, gpuQ[1]);
+
+    int gpuSlot = 0;
+    bool gpuInFlight[2] = {};
 
     installInputCallbacks(win);
 
@@ -215,6 +301,33 @@ int main() {
 
         glBindFramebuffer(GL_FRAMEBUFFER, msaa.fbo ? msaa.fbo : 0);
 
+        bool gpuIssued = false;
+
+        if (gpuInFlight[gpuSlot]) {
+            GLuint64 readyA = 0;
+            GLuint64 readyB = 0;
+
+            glGetQueryObjectui64v(gpuQ[gpuSlot][0], GL_QUERY_RESULT_AVAILABLE, &readyA);
+            glGetQueryObjectui64v(gpuQ[gpuSlot][1], GL_QUERY_RESULT_AVAILABLE, &readyB);
+
+            if (readyA && readyB) {
+                GLuint64 g0 = 0;
+                GLuint64 g1 = 0;
+
+                glGetQueryObjectui64v(gpuQ[gpuSlot][0], GL_QUERY_RESULT, &g0);
+                glGetQueryObjectui64v(gpuQ[gpuSlot][1], GL_QUERY_RESULT, &g1);
+
+                gpuMs = (double)(g1 - g0) / 1.0e6;
+
+                gpuInFlight[gpuSlot] = false;
+            }
+        }
+
+        if (!gpuInFlight[gpuSlot]) {
+            glQueryCounter(gpuQ[gpuSlot][0], GL_TIMESTAMP);
+            gpuIssued = true;
+        }
+
         glViewport(0, 0, fbW, fbH);
 
         glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
@@ -249,6 +362,12 @@ int main() {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
 
+        if (gpuIssued) {
+            glQueryCounter(gpuQ[gpuSlot][1], GL_TIMESTAMP);
+            gpuInFlight[gpuSlot] = true;
+            gpuSlot = 1 - gpuSlot;
+        }
+
         if (uiVisible) {
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -256,7 +375,18 @@ int main() {
 
         if (titleDirty) {
             char title[256];
-            std::snprintf(title, sizeof(title), "FPS: %.1f | INST: %d", fps, INST);
+
+            if (uiVisible)
+                std::snprintf(
+                    title, sizeof(title), "FPS: %.1f | INST: %d", fps, INST);
+            else
+                std::snprintf(
+                    title,
+                    sizeof(title),
+                    "FPS: %.1f | INST: %d | UI hidden - press H",
+                    fps,
+                    INST);
+
             glfwSetWindowTitle(win, title);
             titleDirty = false;
         }
@@ -269,6 +399,9 @@ int main() {
     ImGui::DestroyContext();
 
     msaa.destroy();
+
+    glDeleteQueries(2, gpuQ[0]);
+    glDeleteQueries(2, gpuQ[1]);
 
     glDeleteBuffers(1, &instVbo);
     glDeleteBuffers(1, &ebo);

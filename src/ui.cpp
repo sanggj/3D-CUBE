@@ -17,6 +17,8 @@ static void setAaSamples(int s) {
 }
 
 void buildUi(GLFWwindow* win) {
+    (void)win;
+
     ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_Once);
 
     ImGui::Begin("Settings");
@@ -87,8 +89,9 @@ void buildUi(GLFWwindow* win) {
 
     ImGui::Text("FPS: %.1f", fps);
     ImGui::Text("Frame: %.2f ms", frameMs);
-    ImGui::Text("Frame p50: %.2f  p99: %.2f  max: %.2f",
-                ftP50Ms, ftP99Ms, ftMaxMs);
+    ImGui::Text("Frame p50: %.2f  p95: %.2f  p99: %.2f  max: %.2f",
+                ftP50Ms, ftP95Ms, ftP99Ms, ftMaxMs);
+    ImGui::Text("GPU: %.2f ms", gpuMs);
     ImGui::Text("Instances: %d", INST);
     ImGui::Text("CPU Threads: %u", std::thread::hardware_concurrency());
     ImGui::Text("Change with caution!!");

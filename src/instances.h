@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <vector>
 
 struct Instance {
@@ -10,3 +12,6 @@ struct Instance {
 };
 
 std::vector<Instance> buildInstances(int n);
+
+std::vector<Instance> buildInstancesSeeded(
+    int n, const std::array<std::uint32_t, 4>& master);

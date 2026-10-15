@@ -76,8 +76,10 @@ static void scrollCallback(GLFWwindow* window, double xoff, double yoff) {
 static void keyCallback(
     GLFWwindow* window, int key, int scancode, int action, int mods) {
 
-    if (key == GLFW_KEY_H && action == GLFW_PRESS)
+    if (key == GLFW_KEY_H && action == GLFW_PRESS) {
         uiVisible = !uiVisible;
+        titleDirty = true;
+    }
 
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
 }
@@ -95,10 +97,13 @@ void installInputCallbacks(GLFWwindow* win) {
 }
 
 void pollInput(GLFWwindow* win) {
+    bool focused =
+        glfwGetWindowAttrib(win, GLFW_FOCUSED) == GLFW_TRUE;
+
     bool held =
         glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 
-    if (!held) {
+    if (!focused || !held) {
         drag = false;
         ImGui::GetIO().MouseDown[0] = false;
     }
